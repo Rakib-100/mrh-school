@@ -411,6 +411,23 @@ function App() {
     }
 
     if (supabase) {
+      let pdfUrl = null
+      const pdfFile = formData.get('pdf')
+      if (pdfFile instanceof File && pdfFile.size > 0) {
+        const filePath = `${currentUser?.id || 'shared'}/${Date.now()}-${pdfFile.name}`
+        const { error: uploadError } = await supabase.storage
+          .from('exam-pdfs')
+          .upload(filePath, pdfFile, { contentType: 'application/pdf', upsert: false })
+
+        if (uploadError) {
+          setExamSaveMessage(`PDF upload failed: ${uploadError.message}`)
+          return
+        }
+
+        const { data: publicFile } = supabase.storage.from('exam-pdfs').getPublicUrl(filePath)
+        pdfUrl = publicFile.publicUrl
+      }
+
       const { data, error } = await supabase.from('exams').insert({
         title: newExam.title,
         subject: newExam.subject,
@@ -420,6 +437,7 @@ function App() {
         total_marks: 10,
         question_format: newExam.format.toLowerCase(),
         omr_enabled: newExam.omr === 'Enabled',
+        pdf_url: pdfUrl,
         status: 'published',
         created_by: currentUser?.id || null,
       }).select().single()

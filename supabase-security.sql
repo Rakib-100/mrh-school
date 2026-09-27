@@ -80,3 +80,18 @@ using (true);
 create policy "Authenticated users can view attendance"
 on public.attendance for select to authenticated
 using (student_id = auth.uid());
+
+-- Create a public bucket for teacher question PDFs.
+insert into storage.buckets (id, name, public)
+values ('exam-pdfs', 'exam-pdfs', true)
+on conflict (id) do nothing;
+
+drop policy if exists "Authenticated users can upload exam PDFs" on storage.objects;
+create policy "Authenticated users can upload exam PDFs"
+on storage.objects for insert to authenticated
+with check (bucket_id = 'exam-pdfs');
+
+drop policy if exists "Anyone can view exam PDFs" on storage.objects;
+create policy "Anyone can view exam PDFs"
+on storage.objects for select to public
+using (bucket_id = 'exam-pdfs');
