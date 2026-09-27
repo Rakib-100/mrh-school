@@ -132,6 +132,9 @@ function App() {
     }
   })
   const [examSaveMessage, setExamSaveMessage] = useState('')
+  const [adminStudents, setAdminStudents] = useState([])
+  const [adminTeachers, setAdminTeachers] = useState([])
+  const [adminStats, setAdminStats] = useState({ students: 0, teachers: 0, courses: 0, exams: 0 })
 
   useEffect(() => {
     if (!supabase) {
@@ -209,6 +212,48 @@ function App() {
     loadExams()
     return () => { mounted = false }
   }, [isAuthenticated])
+
+  useEffect(() => {
+    if (!isAuthenticated || role !== 'admin') return undefined
+
+    let mounted = true
+    const loadAdminData = async () => {
+      if (!supabase) {
+        const students = allUsers.filter((user) => user.role === 'student')
+        const teachers = allUsers.filter((user) => user.role === 'teacher')
+        if (mounted) {
+          setAdminStudents(students)
+          setAdminTeachers(teachers)
+          setAdminStats({ students: students.length, teachers: teachers.length, courses: courseCards.length, exams: savedExams.length })
+        }
+        return
+      }
+
+      const [{ data: profiles, error: profilesError }, { count: examCount, error: examsError }] = await Promise.all([
+        supabase.from('profiles').select('id, full_name, student_id, role, batch').order('created_at', { ascending: false }),
+        supabase.from('exams').select('id', { count: 'exact', head: true }),
+      ])
+
+      if (!mounted) return
+      if (profilesError || examsError) {
+        console.error('Could not load admin data:', profilesError?.message || examsError?.message)
+        return
+      }
+
+      const rows = profiles || []
+      setAdminStudents(rows.filter((profile) => profile.role === 'student'))
+      setAdminTeachers(rows.filter((profile) => profile.role === 'teacher'))
+      setAdminStats({
+        students: rows.filter((profile) => profile.role === 'student').length,
+        teachers: rows.filter((profile) => profile.role === 'teacher').length,
+        courses: courseCards.length,
+        exams: examCount || 0,
+      })
+    }
+
+    loadAdminData()
+    return () => { mounted = false }
+  }, [allUsers, isAuthenticated, role, savedExams])
 
   const answeredCount = useMemo(
     () => Object.keys(answers).filter((key) => answers[key]).length,
@@ -1186,10 +1231,17 @@ function App() {
           {role === 'admin' && view === 'dashboard' && (
             <>
               <section className="stats-grid">
-                <div className="stat-card"><span>Total Students</span><strong>1200</strong></div>
-                <div className="stat-card"><span>Total Teachers</span><strong>45</strong></div>
-                <div className="stat-card"><span>Total Courses</span><strong>24</strong></div>
-                <div className="stat-card"><span>Active Exams</span><strong>18</strong></div>
+                <div className="stat-card"><span>Total Students</span><strong>{adminStats.students}</strong></div>
+                <div className="stat-card"><span>Total Teachers</span><strong>{adminStats.teachers}</strong></div>
+                <div className="stat-card"><span>Total Courses</span><strong>{adminStats.courses}</strong></div>
+                <div className="stat-card"><span>Active Exams</span><strong>{adminStats.exams}</strong></div>
+              </section>
+
+              <section className="quick-actions">
+                <button type="button" className="primary-btn" onClick={() => setView('students')}>Manage Students</button>
+                <button type="button" className="secondary-btn" onClick={() => setView('teachers')}>Manage Teachers</button>
+                <button type="button" className="secondary-btn" onClick={() => setView('exams')}>Manage Exams</button>
+                <button type="button" className="secondary-btn" onClick={() => setView('settings')}>Settings</button>
               </section>
 
               <section className="activity-panel">
@@ -1212,8 +1264,16 @@ function App() {
                   <tr><th>Name</th><th>Student ID</th><th>Batch</th><th>Status</th></tr>
                 </thead>
                 <tbody>
-                  <tr><td>Md. Rahman</td><td>MRH-1042</td><td>HSC Science</td><td>Active</td></tr>
-                  <tr><td>Shakib Hossain</td><td>MRH-1043</td><td>SSC Foundation</td><td>Active</td></tr>
+                  {adminStudents.length === 0 ? (
+                    <tr><td colSpan="4">No students registered yet.</td></tr>
+                  ) : adminStudents.map((student) => (
+                    <tr key={student.id}>
+                      <td>{student.full_name || student.name}</td>
+                      <td>{student.student_id || student.studentId || '-'}</td>
+                      <td>{student.batch || 'Not assigned'}</td>
+                      <td>Active</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </section>
@@ -1227,10 +1287,39 @@ function App() {
                   <tr><th>Name</th><th>Subject</th><th>Courses</th><th>Status</th></tr>
                 </thead>
                 <tbody>
-                  <tr><td>Nusrat Jahan</td><td>Mathematics</td><td>2</td><td>Active</td></tr>
-                  <tr><td>Mahmud Hasan</td><td>Physics</td><td>3</td><td>Active</td></tr>
+                  {adminTeachers.length === 0 ? (
+                    <tr><td colSpan="4">No teachers registered yet.</td></tr>
+                  ) : adminTeachers.map((teacher) => (
+                    <tr key={teacher.id}>
+                      <td>{teacher.full_name || teacher.name}</td>
+                      <td>{teacher.subject || 'Not assigned'}</td>
+                      <td>{teacher.courses || 0}</td>
+                      <td>Active</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
+            </section>
+          )}
+
+          {role === 'admin' && view === 'exams' && (
+            <section className="content-panel">
+              <h3>Exams</h3>
+              {savedExams.length === 0 ? (
+                <p>No exams have been created yet.</p>
+              ) : (
+                <div className="exam-list">
+                  {savedExams.map((exam) => (
+                    <div className="exam-box" key={exam.id}>
+                      <div>
+                        <strong>{exam.title}</strong>
+                        <small>{exam.subject} · {exam.format} · OMR {exam.omr}</small>
+                      </div>
+                      <span>{exam.date || 'No date'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
           )}
 

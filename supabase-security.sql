@@ -32,10 +32,22 @@ alter table public.questions enable row level security;
 alter table public.submissions enable row level security;
 alter table public.attendance enable row level security;
 
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'admin'
+  );
+$$;
+
 drop policy if exists "Users can view their profile" on public.profiles;
 create policy "Users can view their profile"
 on public.profiles for select to authenticated
-using (auth.uid() = id);
+using (auth.uid() = id or public.is_admin());
 
 drop policy if exists "Users can create their profile" on public.profiles;
 create policy "Users can create their profile"
@@ -45,7 +57,12 @@ with check (auth.uid() = id);
 drop policy if exists "Users can update their profile" on public.profiles;
 create policy "Users can update their profile"
 on public.profiles for update to authenticated
-using (auth.uid() = id);
+using (auth.uid() = id or public.is_admin());
+
+drop policy if exists "Admins can delete profiles" on public.profiles;
+create policy "Admins can delete profiles"
+on public.profiles for delete to authenticated
+using (public.is_admin());
 
 -- Authenticated users can read published exams; teachers/admins can create exams.
 drop policy if exists "Authenticated users can view exams" on public.exams;
@@ -61,7 +78,12 @@ with check (created_by = auth.uid());
 drop policy if exists "Creators can update exams" on public.exams;
 create policy "Creators can update exams"
 on public.exams for update to authenticated
-using (created_by = auth.uid());
+using (created_by = auth.uid() or public.is_admin());
+
+drop policy if exists "Admins can delete exams" on public.exams;
+create policy "Admins can delete exams"
+on public.exams for delete to authenticated
+using (public.is_admin());
 
 drop policy if exists "Students can submit exams" on public.submissions;
 create policy "Students can submit exams"
@@ -77,6 +99,14 @@ drop policy if exists "Authenticated users can view questions" on public.questio
 create policy "Authenticated users can view questions"
 on public.questions for select to authenticated
 using (true);
+
+drop policy if exists "Teachers and admins can create questions" on public.questions;
+create policy "Teachers and admins can create questions"
+on public.questions for insert to authenticated
+with check (exists (
+  select 1 from public.exams
+  where exams.id = exam_id and (exams.created_by = auth.uid() or public.is_admin())
+));
 
 drop policy if exists "Authenticated users can view attendance" on public.attendance;
 create policy "Authenticated users can view attendance"
