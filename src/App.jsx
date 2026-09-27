@@ -134,6 +134,7 @@ function App() {
   const [examSaveMessage, setExamSaveMessage] = useState('')
   const [adminStudents, setAdminStudents] = useState([])
   const [adminTeachers, setAdminTeachers] = useState([])
+  const [courses, setCourses] = useState(courseCards)
   const [adminStats, setAdminStats] = useState({ students: 0, teachers: 0, courses: 0, exams: 0 })
 
   useEffect(() => {
@@ -214,7 +215,24 @@ function App() {
   }, [isAuthenticated])
 
   useEffect(() => {
-    if (!isAuthenticated || role !== 'admin') return undefined
+    if (!supabase || !isAuthenticated) return undefined
+
+    let mounted = true
+    const loadCourses = async () => {
+      const { data, error } = await supabase
+        .from('courses')
+        .select('id, name, subject, batch, teacher_id, created_at')
+        .order('created_at', { ascending: false })
+
+      if (!error && mounted) setCourses(data || [])
+    }
+
+    loadCourses()
+    return () => { mounted = false }
+  }, [isAuthenticated])
+
+  useEffect(() => {
+    if (!isAuthenticated || !['admin', 'teacher'].includes(role)) return undefined
 
     let mounted = true
     const loadAdminData = async () => {
@@ -224,13 +242,13 @@ function App() {
         if (mounted) {
           setAdminStudents(students)
           setAdminTeachers(teachers)
-          setAdminStats({ students: students.length, teachers: teachers.length, courses: courseCards.length, exams: savedExams.length })
+          setAdminStats({ students: students.length, teachers: teachers.length, courses: courses.length, exams: savedExams.length })
         }
         return
       }
 
       const [{ data: profiles, error: profilesError }, { count: examCount, error: examsError }] = await Promise.all([
-        supabase.from('profiles').select('id, full_name, student_id, role, batch').order('created_at', { ascending: false }),
+        supabase.from('profiles').select('id, full_name, student_id, role, batch, subject').order('created_at', { ascending: false }),
         supabase.from('exams').select('id', { count: 'exact', head: true }),
       ])
 
@@ -246,14 +264,14 @@ function App() {
       setAdminStats({
         students: rows.filter((profile) => profile.role === 'student').length,
         teachers: rows.filter((profile) => profile.role === 'teacher').length,
-        courses: courseCards.length,
+        courses: courses.length,
         exams: examCount || 0,
       })
     }
 
     loadAdminData()
     return () => { mounted = false }
-  }, [allUsers, isAuthenticated, role, savedExams])
+  }, [allUsers, courses, isAuthenticated, role, savedExams])
 
   const answeredCount = useMemo(
     () => Object.keys(answers).filter((key) => answers[key]).length,
@@ -516,6 +534,69 @@ function App() {
 
     setSavedExams((prev) => [newExam, ...prev])
     setExamSaveMessage(`Saved: ${newExam.title}${newExam.pdfName ? ` (${newExam.pdfName})` : ''}`)
+    event.currentTarget.reset()
+  }
+
+  const handleAddCourse = async (event) => {
+    event.preventDefault()
+    const formData = new FormData(event.currentTarget)
+    const course = {
+      name: String(formData.get('name') || '').trim(),
+      subject: String(formData.get('subject') || '').trim(),
+      batch: String(formData.get('batch') || '').trim(),
+      teacher_id: String(formData.get('teacherId') || '').trim() || null,
+      created_by: currentUser?.id || null,
+    }
+
+    if (!course.name || !course.subject) {
+      setExamSaveMessage('Course name and subject are required.')
+      return
+    }
+
+    if (supabase) {
+      const { data, error } = await supabase.from('courses').insert(course).select().single()
+      if (error) {
+        setExamSaveMessage(`Could not save course: ${error.message}`)
+        return
+      }
+      setCourses((prev) => [data, ...prev])
+    } else {
+      setCourses((prev) => [{ ...course, id: Date.now() }, ...prev])
+    }
+
+    setExamSaveMessage(`Course saved: ${course.name}`)
+    event.currentTarget.reset()
+  }
+
+  const handleAddTeacher = async (event) => {
+    event.preventDefault()
+    const formData = new FormData(event.currentTarget)
+    const teacher = {
+      id: String(formData.get('userId') || '').trim(),
+      full_name: String(formData.get('name') || '').trim(),
+      student_id: String(formData.get('teacherId') || '').trim(),
+      role: 'teacher',
+      subject: String(formData.get('subject') || '').trim(),
+    }
+
+    if (!teacher.id || !teacher.full_name) {
+      setExamSaveMessage('Existing Supabase Auth User ID and teacher name are required.')
+      return
+    }
+
+    if (supabase) {
+      const { data, error } = await supabase.from('profiles').upsert(teacher).select().single()
+      if (error) {
+        setExamSaveMessage(`Could not add teacher: ${error.message}`)
+        return
+      }
+      setAdminTeachers((prev) => [data, ...prev.filter((item) => item.id !== data.id)])
+    } else {
+      setAdminTeachers((prev) => [teacher, ...prev])
+    }
+
+    setAdminStats((prev) => ({ ...prev, teachers: prev.teachers + 1 }))
+    setExamSaveMessage(`Teacher added: ${teacher.full_name}`)
     event.currentTarget.reset()
   }
 
@@ -1117,10 +1198,10 @@ function App() {
           {role === 'teacher' && view === 'dashboard' && (
             <>
               <section className="stats-grid">
-                <div className="stat-card"><span>Total Students</span><strong>820</strong></div>
-                <div className="stat-card"><span>My Courses</span><strong>6</strong></div>
-                <div className="stat-card"><span>Upcoming Exams</span><strong>7</strong></div>
-                <div className="stat-card"><span>Recent Results</span><strong>64</strong></div>
+                <div className="stat-card"><span>Total Students</span><strong>{adminStats.students}</strong></div>
+                <div className="stat-card"><span>Courses</span><strong>{adminStats.courses}</strong></div>
+                <div className="stat-card"><span>Exams</span><strong>{adminStats.exams}</strong></div>
+                <div className="stat-card"><span>Portal Status</span><strong>Live</strong></div>
               </section>
               <section className="quick-actions">
                 <button type="button" className="primary-btn" onClick={() => setView('createExam')}>Create Exam</button>
@@ -1282,6 +1363,20 @@ function App() {
           {role === 'admin' && view === 'teachers' && (
             <section className="content-panel">
               <h3>Teachers</h3>
+              <form className="exam-form" onSubmit={handleAddTeacher}>
+                <h4>Add Teacher Profile</h4>
+                <p>First create the account in Supabase Authentication, then paste its User ID here.</p>
+                <div className="two-col">
+                  <label>Auth User ID<input name="userId" type="text" placeholder="Supabase user UUID" /></label>
+                  <label>Teacher Name<input name="name" type="text" placeholder="Full name" /></label>
+                </div>
+                <div className="two-col">
+                  <label>Teacher ID<input name="teacherId" type="text" placeholder="TEACHER-001" /></label>
+                  <label>Subject<input name="subject" type="text" placeholder="Mathematics" /></label>
+                </div>
+                <button type="submit" className="primary-btn">Add Teacher</button>
+              </form>
+              {examSaveMessage && <small className="form-message">{examSaveMessage}</small>}
               <table>
                 <thead>
                   <tr><th>Name</th><th>Subject</th><th>Courses</th><th>Status</th></tr>
@@ -1299,6 +1394,32 @@ function App() {
                   ))}
                 </tbody>
               </table>
+            </section>
+          )}
+
+          {role === 'admin' && view === 'courses' && (
+            <section className="content-panel">
+              <h3>Courses / Batches</h3>
+              <form className="exam-form" onSubmit={handleAddCourse}>
+                <div className="two-col">
+                  <label>Course Name<input name="name" type="text" placeholder="HSC Science" /></label>
+                  <label>Subject<input name="subject" type="text" placeholder="Mathematics" /></label>
+                </div>
+                <div className="two-col">
+                  <label>Batch<input name="batch" type="text" placeholder="HSC 2027" /></label>
+                  <label>Teacher ID (optional)<input name="teacherId" type="text" placeholder="Supabase user UUID" /></label>
+                </div>
+                <button type="submit" className="primary-btn">Add Course</button>
+              </form>
+              {examSaveMessage && <small className="form-message">{examSaveMessage}</small>}
+              <div className="exam-list">
+                {courses.length === 0 ? <p>No courses added yet.</p> : courses.map((course) => (
+                  <div className="exam-box" key={course.id || course.name}>
+                    <div><strong>{course.name}</strong><small>{course.subject} · {course.batch || 'No batch'}</small></div>
+                    <span>{course.teacher_id ? 'Assigned' : 'Unassigned'}</span>
+                  </div>
+                ))}
+              </div>
             </section>
           )}
 
