@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  attendanceSummary,
   courseCards,
   examQuestions,
   recentResults,
@@ -136,6 +135,8 @@ function App() {
   const [adminTeachers, setAdminTeachers] = useState([])
   const [courses, setCourses] = useState(courseCards)
   const [adminStats, setAdminStats] = useState({ students: 0, teachers: 0, courses: 0, exams: 0 })
+  const [studentAttendance, setStudentAttendance] = useState({ present: 0, absent: 0, percentage: '0%' })
+  const [studentResults, setStudentResults] = useState([])
 
   useEffect(() => {
     if (!supabase) {
@@ -170,6 +171,8 @@ function App() {
         name: profile?.full_name || data.session.user.user_metadata?.full_name || 'MRH User',
         role: profile?.role || 'student',
         studentId: profile?.student_id || '',
+        batch: profile?.batch || '',
+        phone: profile?.phone || '',
       }
 
       if (mounted) {
@@ -213,6 +216,34 @@ function App() {
     loadExams()
     return () => { mounted = false }
   }, [isAuthenticated])
+
+  useEffect(() => {
+    if (!supabase || !isAuthenticated || role !== 'student' || !currentUser?.id) return undefined
+
+    let mounted = true
+    const loadStudentData = async () => {
+      const [{ data: attendance }, { data: submissions }] = await Promise.all([
+        supabase.from('attendance').select('status').eq('student_id', currentUser.id),
+        supabase.from('submissions').select('id, obtained_marks, percentage, submitted_at, exams(title)').eq('student_id', currentUser.id).order('submitted_at', { ascending: false }),
+      ])
+
+      if (!mounted) return
+      const attendanceRows = attendance || []
+      const present = attendanceRows.filter((row) => row.status === 'present').length
+      const absent = attendanceRows.filter((row) => row.status === 'absent').length
+      const total = present + absent
+      setStudentAttendance({ present, absent, percentage: total ? `${Math.round((present / total) * 100)}%` : '0%' })
+      setStudentResults((submissions || []).map((submission) => ({
+        exam: submission.exams?.title || 'Exam',
+        score: `${submission.obtained_marks || 0}`,
+        percentage: `${submission.percentage || 0}%`,
+        date: submission.submitted_at ? new Date(submission.submitted_at).toLocaleDateString() : '',
+      })))
+    }
+
+    loadStudentData()
+    return () => { mounted = false }
+  }, [currentUser, isAuthenticated, role])
 
   useEffect(() => {
     if (!supabase || !isAuthenticated) return undefined
@@ -350,6 +381,8 @@ function App() {
         name: profile?.full_name || data.user.user_metadata?.full_name || 'MRH User',
         role: profile?.role || 'student',
         studentId: profile?.student_id || '',
+        batch: profile?.batch || '',
+        phone: profile?.phone || '',
       }
 
       setRole(user.role)
@@ -630,6 +663,8 @@ function App() {
   const currentQuestion = examQuestions[currentQuestionIndex]
   const currentStatus = getStatusText(answers, reviewMap, currentQuestionIndex)
   const timeWarning = timeRemaining <= 60 ? 'critical' : timeRemaining <= 300 ? 'warning' : ''
+  const availableExams = savedExams.length > 0 ? savedExams : upcomingExams
+  const availableResults = studentResults.length > 0 ? studentResults : (supabase ? [] : recentResults)
 
   const pageContent = () => {
     if (!isAuthenticated) {
@@ -730,7 +765,7 @@ function App() {
               <section className="content-panel">
                 <h2>Courses</h2>
                 <div className="card-grid three-up">
-                  {courseCards.map((course) => (
+                  {courses.map((course) => (
                     <div className="info-card" key={course.name}>
                       <h3>{course.name}</h3>
                       <p>{course.students} students</p>
@@ -943,7 +978,7 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {upcomingExams.map((item) => (
+                    {availableExams.map((item) => (
                       <tr key={item.exam}>
                         <td>{item.exam}</td>
                         <td>{item.subject}</td>
@@ -960,7 +995,7 @@ function App() {
               <section className="results-panel">
                 <h3>Recent Results</h3>
                 <div className="result-list">
-                  {recentResults.map((item) => (
+                  {availableResults.map((item) => (
                     <div key={item.exam} className="result-item">
                       <div>
                         <strong>{item.exam}</strong>
@@ -978,11 +1013,11 @@ function App() {
             <section className="content-panel">
               <h3>My Profile</h3>
               <div className="profile-grid">
-                <div className="profile-info"><strong>Name:</strong> Md. Rahman</div>
-                <div className="profile-info"><strong>Student ID:</strong> MRH-1042</div>
-                <div className="profile-info"><strong>Email:</strong> student@mrhschool.com</div>
-                <div className="profile-info"><strong>Batch:</strong> HSC Science</div>
-                <div className="profile-info"><strong>Phone:</strong> +880 1700-000000</div>
+                <div className="profile-info"><strong>Name:</strong> {currentUser?.name || '-'}</div>
+                <div className="profile-info"><strong>Student ID:</strong> {currentUser?.studentId || '-'}</div>
+                <div className="profile-info"><strong>Email:</strong> {currentUser?.email || '-'}</div>
+                <div className="profile-info"><strong>Batch:</strong> {currentUser?.batch || 'Not assigned'}</div>
+                <div className="profile-info"><strong>Phone:</strong> {currentUser?.phone || 'Not added'}</div>
                 <div className="profile-info"><strong>Status:</strong> Active</div>
               </div>
             </section>
@@ -1007,9 +1042,9 @@ function App() {
             <section className="content-panel">
               <h3>Attendance</h3>
               <div className="attendance-summary">
-                <div><span>Present</span><strong>{attendanceSummary.present}</strong></div>
-                <div><span>Absent</span><strong>{attendanceSummary.absent}</strong></div>
-                <div><span>Attendance</span><strong>{attendanceSummary.percentage}</strong></div>
+                <div><span>Present</span><strong>{studentAttendance.present}</strong></div>
+                <div><span>Absent</span><strong>{studentAttendance.absent}</strong></div>
+                <div><span>Attendance</span><strong>{studentAttendance.percentage}</strong></div>
               </div>
             </section>
           )}
@@ -1020,7 +1055,7 @@ function App() {
                 <>
                   <h3>Upcoming Exams</h3>
                   <div className="exam-list">
-                    {upcomingExams.map((exam) => (
+                    {availableExams.map((exam) => (
                       <div key={exam.exam} className="exam-box">
                         <div>
                           <strong>{exam.exam}</strong>
@@ -1068,7 +1103,7 @@ function App() {
                 <>
                   <h3>Previous Results</h3>
                   <div className="result-list large">
-                    {recentResults.map((item) => (
+                    {availableResults.map((item) => (
                       <div className="result-item" key={item.exam}>
                         <div>
                           <strong>{item.exam}</strong>
