@@ -73,10 +73,12 @@ create policy "Students can view their submissions"
 on public.submissions for select to authenticated
 using (student_id = auth.uid());
 
+drop policy if exists "Authenticated users can view questions" on public.questions;
 create policy "Authenticated users can view questions"
 on public.questions for select to authenticated
 using (true);
 
+drop policy if exists "Authenticated users can view attendance" on public.attendance;
 create policy "Authenticated users can view attendance"
 on public.attendance for select to authenticated
 using (student_id = auth.uid());
