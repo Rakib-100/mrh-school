@@ -215,13 +215,31 @@ function App() {
     [answers],
   )
 
-  const handleAutoSubmit = useCallback(() => {
+  const persistSubmission = useCallback(async (evaluation) => {
+    if (!supabase || !currentUser?.id) return
+    const examId = savedExams.find((exam) => Number.isInteger(Number(exam.id)))?.id
+    if (!examId) return
+
+    const { error } = await supabase.from('submissions').insert({
+      exam_id: examId,
+      student_id: currentUser.id,
+      answers,
+      obtained_marks: evaluation.obtained,
+      percentage: evaluation.percentage,
+    })
+
+    if (error) console.error('Could not save submission:', error.message)
+  }, [answers, currentUser, savedExams])
+
+  const handleAutoSubmit = useCallback(async () => {
     if (examSubmitted) return
+    const evaluation = calculateExamResult(answers)
+    await persistSubmission(evaluation)
     setExamSubmitted(true)
     setExamPhase('submitted')
     setShowSubmitModal(false)
-    setResult(calculateExamResult(answers))
-  }, [answers, examSubmitted])
+    setResult(evaluation)
+  }, [answers, examSubmitted, persistSubmission])
 
   useEffect(() => {
     if (!isAuthenticated || examPhase !== 'started' || examSubmitted) return undefined
@@ -412,6 +430,25 @@ function App() {
       }
 
       newExam.id = data.id
+
+      const questionData = {
+        exam_id: data.id,
+        question_text: String(formData.get('questionText') || '').trim(),
+        option_a: String(formData.get('optionA') || '').trim(),
+        option_b: String(formData.get('optionB') || '').trim(),
+        option_c: String(formData.get('optionC') || '').trim(),
+        option_d: String(formData.get('optionD') || '').trim(),
+        correct_answer: String(formData.get('correctAnswer') || 'A'),
+        marks: Number(formData.get('marks') || 2),
+      }
+
+      if (questionData.question_text) {
+        const { error: questionError } = await supabase.from('questions').insert(questionData)
+        if (questionError) {
+          setExamSaveMessage(`Exam saved, but question could not be saved: ${questionError.message}`)
+          return
+        }
+      }
     }
 
     setSavedExams((prev) => [newExam, ...prev])
@@ -437,8 +474,9 @@ function App() {
     setReviewMap((prev) => ({ ...prev, [currentQuestionIndex]: false }))
   }
 
-  const submitExam = () => {
+  const submitExam = async () => {
     const evaluation = calculateExamResult(answers)
+    await persistSubmission(evaluation)
     setResult(evaluation)
     setExamSubmitted(true)
     setExamPhase('submitted')
@@ -1057,18 +1095,18 @@ function App() {
                 <label>Instructions<textarea defaultValue="Read the questions carefully and submit before time ends." /></label>
                 <div className="question-block">
                   <h4>Question 1</h4>
-                  <label>Question Text<input type="text" defaultValue="What is the capital of Bangladesh?" /></label>
+                  <label>Question Text<input name="questionText" type="text" defaultValue="What is the capital of Bangladesh?" /></label>
                   <div className="two-col">
-                    <label>Option A<input type="text" defaultValue="Dhaka" /></label>
-                    <label>Option B<input type="text" defaultValue="Chattogram" /></label>
+                    <label>Option A<input name="optionA" type="text" defaultValue="Dhaka" /></label>
+                    <label>Option B<input name="optionB" type="text" defaultValue="Chattogram" /></label>
                   </div>
                   <div className="two-col">
-                    <label>Option C<input type="text" defaultValue="Sylhet" /></label>
-                    <label>Option D<input type="text" defaultValue="Khulna" /></label>
+                    <label>Option C<input name="optionC" type="text" defaultValue="Sylhet" /></label>
+                    <label>Option D<input name="optionD" type="text" defaultValue="Khulna" /></label>
                   </div>
                   <div className="two-col">
-                    <label>Correct Answer<select defaultValue="A"><option>A</option><option>B</option><option>C</option><option>D</option></select></label>
-                    <label>Marks<input type="number" defaultValue="2" /></label>
+                    <label>Correct Answer<select name="correctAnswer" defaultValue="A"><option>A</option><option>B</option><option>C</option><option>D</option></select></label>
+                    <label>Marks<input name="marks" type="number" defaultValue="2" /></label>
                   </div>
                   <label className="upload-box">
                     PDF Question Sheet (Optional)
