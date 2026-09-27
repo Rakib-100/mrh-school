@@ -7,6 +7,7 @@ import {
   upcomingExams,
   users as initialUsers,
 } from './mockBackend.js'
+import { supabase } from './supabaseClient.js'
 import './App.css'
 
 const publicLinks = [
@@ -133,12 +134,81 @@ function App() {
   const [examSaveMessage, setExamSaveMessage] = useState('')
 
   useEffect(() => {
-    window.localStorage.setItem('mrh-school-users', JSON.stringify(allUsers))
+    if (!supabase) {
+      window.localStorage.setItem('mrh-school-users', JSON.stringify(allUsers))
+    }
   }, [allUsers])
 
   useEffect(() => {
-    window.localStorage.setItem('mrh-school-exams', JSON.stringify(savedExams))
+    if (!supabase) {
+      window.localStorage.setItem('mrh-school-exams', JSON.stringify(savedExams))
+    }
   }, [savedExams])
+
+  useEffect(() => {
+    if (!supabase) return undefined
+
+    let mounted = true
+
+    const restoreSession = async () => {
+      const { data } = await supabase.auth.getSession()
+      if (!mounted || !data.session) return
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.session.user.id)
+        .maybeSingle()
+
+      const user = {
+        id: data.session.user.id,
+        email: data.session.user.email,
+        name: profile?.full_name || data.session.user.user_metadata?.full_name || 'MRH User',
+        role: profile?.role || 'student',
+        studentId: profile?.student_id || '',
+      }
+
+      if (mounted) {
+        setCurrentUser(user)
+        setRole(user.role)
+        setIsAuthenticated(true)
+        setView('dashboard')
+      }
+    }
+
+    restoreSession()
+    return () => { mounted = false }
+  }, [])
+
+  useEffect(() => {
+    if (!supabase || !isAuthenticated) return undefined
+
+    let mounted = true
+    const loadExams = async () => {
+      const { data, error } = await supabase
+        .from('exams')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (!error && mounted) {
+        setSavedExams((data || []).map((exam) => ({
+          id: exam.id,
+          title: exam.title,
+          course: exam.batch || 'General Batch',
+          subject: exam.subject,
+          date: exam.exam_date || '',
+          duration: `${exam.duration_minutes || 45} Minutes`,
+          format: exam.question_format || 'Text',
+          omr: exam.omr_enabled === false ? 'Disabled' : 'Enabled',
+          pdfName: '',
+          createdBy: exam.created_by || '',
+        })))
+      }
+    }
+
+    loadExams()
+    return () => { mounted = false }
+  }, [isAuthenticated])
 
   const answeredCount = useMemo(
     () => Object.keys(answers).filter((key) => answers[key]).length,
@@ -170,11 +240,47 @@ function App() {
     return () => clearInterval(timer)
   }, [isAuthenticated, examPhase, examSubmitted, handleAutoSubmit])
 
-  const handleLogin = (event) => {
+  const handleLogin = async (event) => {
     event.preventDefault()
 
     const enteredEmail = loginForm.email.trim().toLowerCase()
     const enteredPassword = loginForm.password
+
+    if (supabase) {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: enteredEmail,
+        password: enteredPassword,
+      })
+
+      if (error || !data.user) {
+        alert(error?.message || 'Invalid email or password.')
+        return
+      }
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .maybeSingle()
+
+      const user = {
+        id: data.user.id,
+        email: data.user.email,
+        name: profile?.full_name || data.user.user_metadata?.full_name || 'MRH User',
+        role: profile?.role || 'student',
+        studentId: profile?.student_id || '',
+      }
+
+      setRole(user.role)
+      setCurrentUser(user)
+      setIsAuthenticated(true)
+      setView('dashboard')
+      setExamPhase('instructions')
+      setCurrentQuestionIndex(0)
+      setShowSubmitModal(false)
+      setLoginForm({ email: '', password: '' })
+      return
+    }
 
     const user = allUsers.find(
       (item) =>
@@ -197,13 +303,47 @@ function App() {
     alert('Invalid email or password. Please use a valid MRH SCHOOL account.')
   }
 
-  const handleRegister = (event) => {
+  const handleRegister = async (event) => {
     event.preventDefault()
 
     const normalizedEmail = registerForm.email.trim().toLowerCase()
 
     if (!registerForm.name.trim() || !normalizedEmail || !registerForm.password) {
       alert('Please complete all required registration fields.')
+      return
+    }
+
+    if (supabase) {
+      const studentId = registerForm.studentId.trim() || `MRH-${Date.now().toString().slice(-4)}`
+      const { data, error } = await supabase.auth.signUp({
+        email: normalizedEmail,
+        password: registerForm.password,
+        options: { data: { full_name: registerForm.name.trim(), student_id: studentId } },
+      })
+
+      if (error || !data.user) {
+        alert(error?.message || 'Registration failed. Please try again.')
+        return
+      }
+
+      if (data.session) {
+        const { error: profileError } = await supabase.from('profiles').upsert({
+          id: data.user.id,
+          full_name: registerForm.name.trim(),
+          student_id: studentId,
+          role: 'student',
+        })
+
+        if (profileError) {
+          alert(`Account created, but profile could not be saved: ${profileError.message}`)
+          return
+        }
+      }
+
+      setRegisterForm({ name: '', email: '', password: '', studentId: '' })
+      setLoginForm({ email: normalizedEmail, password: '' })
+      setView('login')
+      alert(data.session ? 'Registration successful. You can now log in.' : 'Registration successful. Check your email, then log in.')
       return
     }
 
@@ -229,7 +369,7 @@ function App() {
     alert('Registration successful. Please log in with your new account.')
   }
 
-  const handleSaveExam = (event) => {
+  const handleSaveExam = async (event) => {
     event.preventDefault()
     const formData = new FormData(event.currentTarget)
     const title = String(formData.get('title') || '').trim()
@@ -250,6 +390,28 @@ function App() {
       omr: String(formData.get('omr') || 'Enabled'),
       pdfName: formData.get('pdf')?.name || '',
       createdBy: currentUser?.name || 'Teacher',
+    }
+
+    if (supabase) {
+      const { data, error } = await supabase.from('exams').insert({
+        title: newExam.title,
+        subject: newExam.subject,
+        batch: newExam.course,
+        exam_date: newExam.date || null,
+        duration_minutes: Number.parseInt(newExam.duration, 10) || 45,
+        total_marks: 10,
+        question_format: newExam.format.toLowerCase(),
+        omr_enabled: newExam.omr === 'Enabled',
+        status: 'published',
+        created_by: currentUser?.id || null,
+      }).select().single()
+
+      if (error) {
+        setExamSaveMessage(`Could not save exam: ${error.message}`)
+        return
+      }
+
+      newExam.id = data.id
     }
 
     setSavedExams((prev) => [newExam, ...prev])
@@ -562,7 +724,7 @@ function App() {
             ))}
           </nav>
 
-          <button type="button" className="logout-btn" onClick={() => { setIsAuthenticated(false); setCurrentUser(null); setView('home'); setRole('student'); setLoginForm({ email: '', password: '' }) }}>
+          <button type="button" className="logout-btn" onClick={async () => { if (supabase) await supabase.auth.signOut(); setIsAuthenticated(false); setCurrentUser(null); setView('home'); setRole('student'); setLoginForm({ email: '', password: '' }) }}>
             Logout
           </button>
         </aside>
